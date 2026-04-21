@@ -18,11 +18,11 @@ class Attention(nnx.Module):
 
     def __call__(
         self,
-        query: Float[Array, 'B Lq D'],
-        key: Float[Array, 'B Lk D'],
-        value: Float[Array, 'B Lk D'],
-        mask: Bool[Array, 'B 1 Lq Lk'],
-    ) -> Float[Array, 'B Lq D']:
+        query: Float[Array, "B Lq D"],
+        key: Float[Array, "B Lk D"],
+        value: Float[Array, "B Lk D"],
+        mask: Bool[Array, "B 1 Lq Lk"],
+    ) -> Float[Array, "B Lq D"]:
         B, Lq, D = query.shape
         _, Lk, _ = key.shape
 
@@ -64,26 +64,40 @@ class Embedding(nnx.Module):
         curr_seqlength = tokens.shape[1]
         positions: Int[Array, "B Lq"] = jnp.arange(curr_seqlength)[None, :]
         return self.Embedding(tokens) + self.Positional(positions)
-    
-    def logits(self, hidden: Float[Array, 'B Lq D']) -> Float[Array, 'B Lq V']:
+
+    def logits(self, hidden: Float[Array, "B Lq D"]) -> Float[Array, "B Lq V"]:
         return self.linear(hidden)
 
+
 class Transformer(nnx.Module):
-    def __init__(self, hidden_size: int, interm_size: int, num_heads: int, dropout_prob: float, rngs: nnx.Rngs):
+    def __init__(
+        self,
+        hidden_size: int,
+        interm_size: int,
+        num_heads: int,
+        dropout_prob: float,
+        rngs: nnx.Rngs,
+    ):
         self.self_attention = Attention(num_heads, hidden_size, rngs)
         self.cross_attention = Attention(num_heads, hidden_size, rngs)
         self.ffn = nnx.Sequential(
             nnx.Linear(hidden_size, interm_size, rngs=rngs),
             nnx.relu,
             nnx.Linear(interm_size, hidden_size, rngs=rngs),
-            nnx.Dropout(dropout_prob, rngs=rngs)
+            nnx.Dropout(dropout_prob, rngs=rngs),
         )
         self.norm1 = nnx.LayerNorm(hidden_size, rngs=rngs)
         self.norm2 = nnx.LayerNorm(hidden_size, rngs=rngs)
         self.norm3 = nnx.LayerNorm(hidden_size, rngs=rngs)
 
-    def __call__(self, x: Float[Array, 'B Lq D'], encoder_output: Float[Array, 'B Lk D'], self_mask: Bool[Array, 'B 1 Lq Lk'], cross_mask: Bool[Array, 'B 1 Lq Lk']) -> Float[Array, 'B Lq D']:
-        norm: Float[Array, 'B L D'] = self.norm1(x)
+    def __call__(
+        self,
+        x: Float[Array, "B Lq D"],
+        encoder_output: Float[Array, "B Lk D"],
+        self_mask: Bool[Array, "B 1 Lq Lk"],
+        cross_mask: Bool[Array, "B 1 Lq Lk"],
+    ) -> Float[Array, "B Lq D"]:
+        norm: Float[Array, "B L D"] = self.norm1(x)
         x += self.self_attention(norm, norm, norm, self_mask)
 
         norm = self.norm2(x)
@@ -93,16 +107,37 @@ class Transformer(nnx.Module):
         x += self.ffn(norm)
         return x
 
+
 class DecoderModel(nnx.Module):
-    def __init__(self, hidden_size, interm_size: int, num_heads: int, vocab_size: int, seq_length: int, layers: int, dropout_prob: float, rngs: nnx.Rngs):
+    def __init__(
+        self,
+        hidden_size,
+        interm_size: int,
+        num_heads: int,
+        vocab_size: int,
+        seq_length: int,
+        layers: int,
+        dropout_prob: float,
+        rngs: nnx.Rngs,
+    ):
         self.embedding = Embedding(hidden_size, vocab_size, seq_length, rngs)
-        self.decoder = nnx.List([
-            Transformer(hidden_size, interm_size, num_heads, dropout_prob, rngs) for _ in range(layers)
-        ])
+        self.decoder = nnx.List(
+            [
+                Transformer(hidden_size, interm_size, num_heads, dropout_prob, rngs)
+                for _ in range(layers)
+            ]
+        )
 
-    def __call__(self, tokens: Int[Array, 'B Lq V'], encoder_output: Float[Array, 'B Lk D'], self_mask: Bool[Array, 'B 1 Lq Lk'], cross_mask: Bool[Array, 'B 1 Lq Lk']):
-        hidden_output: Float[Array, 'B Lq D'] = self.embedding.embedding(tokens)
+    def __call__(
+        self,
+        tokens: Int[Array, "B Lq V"],
+        encoder_output: Float[Array, "B Lk D"],
+        self_mask: Bool[Array, "B 1 Lq Lk"],
+        cross_mask: Bool[Array, "B 1 Lq Lk"],
+    ):
+        hidden_output: Float[Array, "B Lq D"] = self.embedding.embedding(tokens)
         for layer in self.decoder:
-            hidden_output: Float[Array, 'B Lq D'] = layer(hidden_output, encoder_output, self_mask, cross_mask)
+            hidden_output: Float[Array, "B Lq D"] = layer(
+                hidden_output, encoder_output, self_mask, cross_mask
+            )
         return self.embedding.logits(hidden_output)
-
