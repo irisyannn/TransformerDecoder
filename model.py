@@ -8,7 +8,7 @@ class Attention(nnx.Module):
     def __init__(self, num_heads: int, hidden_size: int, rngs: nnx.Rngs):
         self.num_heads = num_heads
         self.hidden_size = hidden_size
-        head_dim = self.hidden_size // self.num_heads
+        self.head_dim = self.hidden_size // self.num_heads
         self.Wq = nnx.Linear(hidden_size, hidden_size, rngs=rngs)
         self.Wk = nnx.Linear(hidden_size, hidden_size, rngs=rngs)
         self.Wv = nnx.Linear(hidden_size, hidden_size, rngs=rngs)
@@ -34,8 +34,8 @@ class Embedding(nnx.Module):
         self.hidden_size = hidden_size
         self.vocab_size = vocab_size
         self.seq_length = seq_length
-        self.Embedding: Float[Array, 'V D'] = nnx.Embed(vocab_size, hidden_size, rngs=rngs)
-        self.Positional: Float[Array, 'L D'] = nnx.Embed(seq_length, hidden_size, rngs=rngs)
+        self.Embedding: nnx.Embed = nnx.Embed(vocab_size, hidden_size, rngs=rngs)
+        self.Positional: nnx.Embed = nnx.Embed(seq_length, hidden_size, rngs=rngs)
 
     def __call__(self, tokens: Int[Array, 'B L']) -> Float[Array, 'B L D']:
         positions: Int[Array, 'B L'] = jnp.arange(self.seq_length)[None, :]
