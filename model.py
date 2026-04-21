@@ -51,22 +51,29 @@ class Attention(nnx.Module):
 
 class Embedding(nnx.Module):
     def __init__(
-        self, hidden_size: int, vocab_size: int, seq_length: int, rngs: nnx.Rngs
+        self,
+        hidden_size: int,
+        vocab_size: int,
+        seq_length: int,
+        dropout_prob: float,
+        rngs: nnx.Rngs,
     ):
-        self.hidden_size = hidden_size
-        self.vocab_size = vocab_size
-        self.seq_length = seq_length
         self.Embedding: nnx.Embed = nnx.Embed(vocab_size, hidden_size, rngs=rngs)
-        self.Positional: nnx.Embed = nnx.Embed(seq_length, hidden_size, rngs=rngs)
-        self.linear = nnx.Linear(hidden_size, vocab_size, rngs=rngs)
 
-    def embedding(self, tokens: Int[Array, "B Lq"]) -> Float[Array, "B Lq D"]:
+        den = jnp.exp(-jnp.arange(0, hidden_size, 2) * jnp.log(10000.0) / hidden_size)
+        pos: Int[Array, "Lq 1"] = jnp.arange(0, seq_length)[:, jnp.newaxis]
+        pe: Float[Array, "Lq D"] = jnp.zeros((seq_length, hidden_size))
+        pe = pe.at[:, 0::2].set(jnp.sin(pos * den))
+        pe = pe.at[:, 1::2].set(jnp.cos(pos * den))
+        self.pos_embedding = nnx.Variable(pe)
+        self.dropout = nnx.Dropout(dropout_prob, rngs=rngs)
+
+    def __call__(self, tokens: Int[Array, "B Lq"]) -> Float[Array, "B Lq D"]:
         curr_seqlength = tokens.shape[1]
-        positions: Int[Array, "B Lq"] = jnp.arange(curr_seqlength)[None, :]
-        return self.Embedding(tokens) + self.Positional(positions)
-
-    def logits(self, hidden: Float[Array, "B Lq D"]) -> Float[Array, "B Lq V"]:
-        return self.linear(hidden)
+        token_embedding = self.Embedding(tokens)
+        return self.dropout(
+            token_embedding + self.pos_embedding.value[:curr_seqlength, :]
+        )
 
 
 class Transformer(nnx.Module):
@@ -100,10 +107,10 @@ class Transformer(nnx.Module):
         norm: Float[Array, "B L D"] = self.norm1(x)
         x += self.self_attention(norm, norm, norm, self_mask)
 
-        norm = self.norm2(x)
+        norm: Float[Array, "B Lq D"] = self.norm2(x)
         x += self.cross_attention(norm, encoder_output, encoder_output, cross_mask)
 
-        norm = self.norm3(x)
+        norm: Float[Array, "B Lq D"] = self.norm3(x)
         x += self.ffn(norm)
         return x
 
@@ -120,13 +127,16 @@ class DecoderModel(nnx.Module):
         dropout_prob: float,
         rngs: nnx.Rngs,
     ):
-        self.embedding = Embedding(hidden_size, vocab_size, seq_length, rngs)
+        self.embedding = Embedding(
+            hidden_size, vocab_size, seq_length, dropout_prob, rngs
+        )
         self.decoder = nnx.List(
             [
                 Transformer(hidden_size, interm_size, num_heads, dropout_prob, rngs)
                 for _ in range(layers)
             ]
         )
+        self.out = nnx.Linear(hidden_size, vocab_size, rngs=rngs)
 
     def __call__(
         self,
@@ -135,9 +145,9 @@ class DecoderModel(nnx.Module):
         self_mask: Bool[Array, "B 1 Lq Lk"],
         cross_mask: Bool[Array, "B 1 Lq Lk"],
     ):
-        hidden_output: Float[Array, "B Lq D"] = self.embedding.embedding(tokens)
+        hidden_output: Float[Array, "B Lq D"] = self.embedding(tokens)
         for layer in self.decoder:
             hidden_output: Float[Array, "B Lq D"] = layer(
                 hidden_output, encoder_output, self_mask, cross_mask
             )
-        return self.embedding.logits(hidden_output)
+        return self.out(hidden_output)
