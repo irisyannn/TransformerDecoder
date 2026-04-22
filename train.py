@@ -7,6 +7,8 @@ import optax
 import argparse
 import datasets as dats
 from torch.utils.data import DataLoader
+import orbax.checkpoint as ocp
+import os
 
 from model import DecoderModel
 
@@ -72,6 +74,7 @@ def val_batch(batch, model: DecoderModel, loss_fn, pad_idx):
 
 
 def validate(model, val_loader, loss_fn, pad_idx):
+    model.train(False)
     avg_loss, avg_acc = 0.0, 0.0
     for batch in val_loader:
         jax_batch = jax.tree_util.tree_map(
@@ -80,48 +83,148 @@ def validate(model, val_loader, loss_fn, pad_idx):
         loss, acc = val_batch(jax_batch, model, loss_fn, pad_idx)
         avg_loss += loss
         avg_acc += acc
+    model.train(True)
     return avg_loss / len(val_loader), avg_acc / len(val_loader)
 
 
 def train(
-    model, train_loader, val_loader, loss_fn, num_epochs, pad_idx, log_every, val_every
+    model,
+    train_loader,
+    val_loader,
+    loss_fn,
+    num_epochs,
+    pad_idx,
+    log_every,
+    val_every,
+    mngr,
+    checkpoint_dir,
 ):
+    best_val_loss = float("inf")
+    global_step = 0
     for epoch in range(num_epochs):
         print(f"Epoch {epoch}\n-------------------------------")
         model.train()
 
-        for step, batch in enumerate(train_loader):
+        for batch in train_loader:
             jax_batch = jax.tree_util.tree_map(
                 lambda x: jnp.array(x.numpy()) if hasattr(x, "numpy") else x, batch
             )
             loss, acc = train_batch(jax_batch, model, loss_fn, optimizer, pad_idx)
-            if step % log_every == 0:
-                print(f"Step {step} | Loss: {loss:.4f} | Acc: {acc:.4f}")
-            if step % val_every == 0:
+            if global_step % log_every == 0:
+                print(
+                    f"Step {global_step} | Loss: {loss.item():.4f} | Acc: {acc.item():.4f}"
+                )
+            if global_step % val_every == 0:
                 val_loss, val_acc = validate(model, val_loader, loss_fn, pad_idx)
-                print(f"VALIDATION | Loss: {loss:.4f} | Acc: {acc:.4f}")
+                print(f"VALIDATION | Loss: {loss.item():.4f} | Acc: {acc.item():.4f}")
+
+            if args.save_best and val_loss < best_val_loss:
+                best_val_loss = val_loss
+                save_checkpoint(
+                    mngr, checkpoint_dir, model, optimizer, global_step, is_best=True
+                )
+            global_step += 1
 
     print("Training complete.")
 
 
+def save_checkpoint(mngr, checkpoint_dir, model, optimizer, step, is_best=True):
+    state = {
+        "model": nnx.state(model),
+        "optimizer": nnx.state(optimizer),
+        "step": step,
+    }
+    mngr.save(step, args=ocp.args.StandardSave(state))
+
+    if is_best:
+        best_path = os.path.join(checkpoint_dir, "best")
+        mngr.save(
+            step,
+            args=ocp.args.StandardSave(state),
+            checkpoint_kwargs={"path": best_path},
+        )
+
+    mngr.wait_until_finished()
+    print(f" > Checkpoint saved at step {step}")
+
+
+def load_checkpoint(mngr, model, optimizer):
+    latest_step = mngr.latest_step()
+    if latest_step is None:
+        print("No checkpoint found. Starting from scratch.")
+        return
+    state = {
+        "model": nnx.state(model),
+        "optimizer": nnx.state(optimizer),
+        "step": latest_step,
+    }
+    restored = mngr.restore(latest_step, args=ocp.args.StandardRestore(state))
+
+    # Update the NNX objects in-place
+    nnx.update(model, restored["model"])
+    nnx.update(optimizer, restored["optimizer"])
+
+    print(f" > Restored checkpoint from step {latest_step}")
+    return restored["step"]
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--dir_model",
+        type=str,
+        default="out_models",
+        help="Directory for saving model files",
+    )
+    parser.add_argument(
+        "--episode_type",
+        type=str,
+        default="retrieve",
+        help="What type of episodes do we want? See datasets.py for options",
+    )
+    parser.add_argument(
+        "--batch_size", type=int, default=25, help="number of episodes per batch"
+    )
+    parser.add_argument(
+        "--nepochs", type=int, default=50, help="number of training epochs"
+    )
+    parser.add_argument("--lr", type=float, default=0.001, help="learning rate")
+    parser.add_argument(
+        "--nlayers_decoder", type=int, default=3, help="number of layers for decoder"
+    )
+    parser.add_argument("--emb_size", type=int, default=128, help="size of embedding")
+    parser.add_argument(
+        "--ff_mult",
+        type=int,
+        default=4,
+        help="multiplier for size of the fully-connected layer in transformer",
+    )
+    parser.add_argument(
+        "--dropout",
+        type=float,
+        default=0.1,
+        help="dropout applied to embeddings and transformer",
+    )
+    parser.add_argument(
+        "--resume",
+        default=False,
+        action="store_true",
+        help="Resume training from a previous checkpoint",
+    )
 
     args = parser.parse_args()
-    hidden_size = args.hidden_size
-    interm_size = args.interm_size
-    num_heads = args.num_heads
-    vocab_size = args.vocab_size
-    seq_length = args.seq_length
-    dropout_prob = args.dropout_prob
-    nlayers = args.nlayers
-    learning_rate = args.learning_rate
-    weight_decay = args.weight_decay
-    num_epochs = args.num_epochs
+    hidden_size = args.emb_size
+    interm_size = args.ff_mult * hidden_size
+    dropout_prob = args.dropout
+    nlayers = args.nlayers_decoder
+    learning_rate = args.lr
+    num_epochs = args.nepochs
     batch_size = args.batch_size
-    log_every = args.log_every
-    val_every = args.val_every
     episode_type = args.episode_type
+    num_heads = 8
+    log_every = 10
+    val_every = 100
+    weight_decay = 0.01
 
     D_train, D_val = dats.get_dataset(episode_type)
     train_loader = DataLoader(
@@ -136,8 +239,19 @@ if __name__ == "__main__":
         collate_fn=lambda x: dats.make_biml_batch(x, D_val.langs),
         shuffle=False,
     )
+    iterator = iter(train_loader)
+    batch = next(iterator)
+    seq_length = batch["xq_context_padded"].shape[1] + batch["yq_sos_padded"].shape[1]
+
     langs = D_train.langs
     pad_idx = langs["output"].PAD_idx
+    vocab_size = langs["output"].n_symbols
+
+    checkpoint_dir = os.path.abspath(args.dir_model)
+    options = ocp.CheckpointManagerOptions(max_to_keep=3, create=True)
+    mngr = ocp.CheckpointManager(
+        checkpoint_dir, ocp.StandardCheckpointer(), options=options
+    )
 
     rngs = nnx.Rngs(42)
     model = DecoderModel(
@@ -163,4 +277,6 @@ if __name__ == "__main__":
         pad_idx,
         log_every,
         val_every,
+        mngr,
+        checkpoint_dir,
     )
