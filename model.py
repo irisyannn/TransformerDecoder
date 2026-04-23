@@ -13,7 +13,6 @@ class Attention(nnx.Module):
         self.hidden_size: int = hidden_size
         self.head_dim: int = self.hidden_size // self.num_heads
         self.Wq = nnx.Linear(hidden_size, hidden_size, rngs=rngs)
-        self.Wq = nnx.Linear(hidden_size, hidden_size, rngs=rngs)
         self.Wk = nnx.Linear(hidden_size, hidden_size, rngs=rngs)
         self.Wv = nnx.Linear(hidden_size, hidden_size, rngs=rngs)
         self.Wo = nnx.Linear(hidden_size, hidden_size, rngs=rngs)
@@ -28,21 +27,21 @@ class Attention(nnx.Module):
         B, L, D = query.shape
 
         Q: Float[Array, "B H L d_k"] = rearrange(
-            self.Wq(query), "B L (H d_k) -> B H L d_k"
+            self.Wq(query), "B L (H d_k) -> B H L d_k", H=self.num_heads
         )
         K: Float[Array, "B H L d_k"] = rearrange(
-            self.Wk(key), "B L (H d_k) -> B H L d_k"
+            self.Wk(key), "B L (H d_k) -> B H L d_k", H=self.num_heads
         )
         V: Float[Array, "B H L d_k"] = rearrange(
-            self.Wv(value), "B L (H d_k) -> B H L d_k"
+            self.Wv(value), "B L (H d_k) -> B H L d_k", H=self.num_heads
         )
 
         scores: Float[Array, "B H L L"] = einsum(
-            Q, K, "B H L d_k, B H L d_k -> B H L L"
+            Q, K, "B H i d_k, B H j d_k -> B H i j"
         ) / jnp.sqrt(self.head_dim)
         softmax: Float[Array, "B H L L"] = jax.nn.softmax(scores, axis=-1, where=mask)
         attention: Float[Array, "B H L d_k"] = einsum(
-            softmax, V, "B H L L, B H L d_k -> B H L d_k"
+            softmax, V, "B H i L, B H L d_k -> B H i d_k"
         )
         multi_attention: Float[Array, "B L D"] = rearrange(
             attention, "B H L d_k -> B L (H d_k)"
@@ -123,14 +122,15 @@ class DecoderModel(nnx.Module):
         hidden_size,
         interm_size: int,
         num_heads: int,
-        vocab_size: int,
+        input_vocab_size: int,
+        output_vocab_size: int,
         seq_length: int,
         layers: int,
         dropout_prob: float,
         rngs: nnx.Rngs,
     ):
         self.embedding = Embedding(
-            hidden_size, vocab_size, seq_length, dropout_prob, rngs
+            hidden_size, input_vocab_size, seq_length, dropout_prob, rngs
         )
         self.decoder = nnx.List(
             [
@@ -138,7 +138,7 @@ class DecoderModel(nnx.Module):
                 for _ in range(layers)
             ]
         )
-        self.out = nnx.Linear(hidden_size, vocab_size, rngs=rngs)
+        self.out = nnx.Linear(hidden_size, output_vocab_size, rngs=rngs)
 
     def __call__(
         self,
