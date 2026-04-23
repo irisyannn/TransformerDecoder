@@ -29,9 +29,15 @@ def train_batch(batch, model: DecoderModel, optimizer, source_pad_idx, target_pa
             jnp.ones((B, 1, L, L), dtype=bool)
         )
 
-        source_padding_mask: Bool[Array, "B 1 1 L1"] = (source != source_pad_idx)[:, jnp.newaxis, jnp.newaxis, :]
-        target_padding_mask: Bool[Array, "B 1 1 L2"] = (target_shifted != target_pad_idx)[:, jnp.newaxis, jnp.newaxis, :]
-        padding_mask: Bool[Array, "B 1 1 L"] = jnp.concatenate([source_padding_mask, target_padding_mask], axis=-1)
+        source_padding_mask: Bool[Array, "B 1 1 L1"] = (source != source_pad_idx)[
+            :, jnp.newaxis, jnp.newaxis, :
+        ]
+        target_padding_mask: Bool[Array, "B 1 1 L2"] = (
+            target_shifted != target_pad_idx
+        )[:, jnp.newaxis, jnp.newaxis, :]
+        padding_mask: Bool[Array, "B 1 1 L"] = jnp.concatenate(
+            [source_padding_mask, target_padding_mask], axis=-1
+        )
 
         attention_mask: Bool[Array, "B 1 L L"] = causal_mask & padding_mask
 
@@ -39,16 +45,20 @@ def train_batch(batch, model: DecoderModel, optimizer, source_pad_idx, target_pa
             full_input, None, attention_mask, None
         )
         predicted_logits: Float[Array, "B L2 V"] = model_logits[:, L1:, :]
-        target_loss: Float[Array, "B L2"] = optax.softmax_cross_entropy_with_integer_labels(predicted_logits, target)
-        loss_mask: Bool[Array, "B L2"] = (target != target_pad_idx)
+        target_loss: Float[Array, "B L2"] = (
+            optax.softmax_cross_entropy_with_integer_labels(predicted_logits, target)
+        )
+        loss_mask: Bool[Array, "B L2"] = target != target_pad_idx
 
         return jnp.sum(target_loss * loss_mask) / jnp.sum(loss_mask), predicted_logits
 
     (loss, logits), grads = nnx.value_and_grad(calculate_loss, has_aux=True)(model)
     optimizer.update(model, grads)
 
-    correct = (jnp.argmax(logits, axis=-1) == target)
-    accuracy = jnp.sum(correct * (target != target_pad_idx)) / jnp.sum(target != target_pad_idx)
+    correct = jnp.argmax(logits, axis=-1) == target
+    accuracy = jnp.sum(correct * (target != target_pad_idx)) / jnp.sum(
+        target != target_pad_idx
+    )
     return loss, accuracy
 
 
@@ -62,18 +72,28 @@ def val_batch(batch, model: DecoderModel, source_pad_idx, target_pad_idx):
     _, L1 = source.shape
 
     causal_mask: Bool[Array, "B 1 L L"] = jnp.tril(jnp.ones((B, 1, L, L), dtype=bool))
-    source_padding_mask: Bool[Array, "B 1 1 L1"] = (source != source_pad_idx)[:, jnp.newaxis, jnp.newaxis, :]
-    target_padding_mask: Bool[Array, "B 1 1 L2"] = (target_shifted != target_pad_idx)[:, jnp.newaxis, jnp.newaxis, :]
-    padding_mask: Bool[Array, "B 1 1 L"] = jnp.concatenate([source_padding_mask, target_padding_mask], axis=-1)
+    source_padding_mask: Bool[Array, "B 1 1 L1"] = (source != source_pad_idx)[
+        :, jnp.newaxis, jnp.newaxis, :
+    ]
+    target_padding_mask: Bool[Array, "B 1 1 L2"] = (target_shifted != target_pad_idx)[
+        :, jnp.newaxis, jnp.newaxis, :
+    ]
+    padding_mask: Bool[Array, "B 1 1 L"] = jnp.concatenate(
+        [source_padding_mask, target_padding_mask], axis=-1
+    )
     attention_mask: Bool[Array, "B 1 L L"] = causal_mask & padding_mask
 
     model_logits: Float[Array, "B L V"] = model(full_input, None, attention_mask, None)
     predicted_logits: Float[Array, "B L2 V"] = model_logits[:, L1:, :]
-    target_loss: Float[Array, "B L2"] = optax.softmax_cross_entropy_with_integer_labels(predicted_logits, target)
-    loss_mask: Bool[Array, "B L2"] = (target != target_pad_idx)
+    target_loss: Float[Array, "B L2"] = optax.softmax_cross_entropy_with_integer_labels(
+        predicted_logits, target
+    )
+    loss_mask: Bool[Array, "B L2"] = target != target_pad_idx
 
-    correct = (jnp.argmax(predicted_logits, axis=-1) == target)
-    accuracy = jnp.sum(correct * (target != target_pad_idx)) / jnp.sum(target != target_pad_idx)
+    correct = jnp.argmax(predicted_logits, axis=-1) == target
+    accuracy = jnp.sum(correct * (target != target_pad_idx)) / jnp.sum(
+        target != target_pad_idx
+    )
 
     return jnp.sum(target_loss * loss_mask) / jnp.sum(loss_mask), accuracy
 
@@ -120,20 +140,24 @@ def train(
             )
             input_keys = ["xq_context_padded", "yq_sos_padded", "yq_padded"]
             clean_batch = {k: jax_batch[k] for k in input_keys}
-            loss, acc = train_batch(clean_batch, model, optimizer, source_pad_idx, target_pad_idx)
+            loss, acc = train_batch(
+                clean_batch, model, optimizer, source_pad_idx, target_pad_idx
+            )
             if global_step % log_every == 0:
                 print(
                     f"Step {global_step} | Loss: {loss.item():.4f} | Acc: {acc.item():.4f}"
                 )
             if global_step % val_every == 0:
-                val_loss, val_acc = validate(model, val_loader, source_pad_idx, target_pad_idx)
-                print(f"VALIDATION | Loss: {val_loss.item():.4f} | Acc: {val_acc.item():.4f}")
+                val_loss, val_acc = validate(
+                    model, val_loader, source_pad_idx, target_pad_idx
+                )
+                print(
+                    f"VALIDATION | Loss: {val_loss.item():.4f} | Acc: {val_acc.item():.4f}"
+                )
 
             if save_best and val_loss < best_val_loss:
                 best_val_loss = val_loss
-                save_checkpoint(
-                    mngr, checkpoint_dir, model, optimizer, global_step
-                )
+                save_checkpoint(mngr, checkpoint_dir, model, optimizer, global_step)
             global_step += 1
 
     print("Training complete.")
@@ -162,7 +186,9 @@ def load_checkpoint(mngr, model, optimizer):
         "optimizer": nnx.state(optimizer),
         "step": latest_step,
     }
-    restored = mngr.restore(latest_step, args=ocp.args.Composite(state=ocp.args.StandardRestore(state)))
+    restored = mngr.restore(
+        latest_step, args=ocp.args.Composite(state=ocp.args.StandardRestore(state))
+    )
 
     nnx.update(model, restored["state"]["model"])
     nnx.update(optimizer, restored["state"]["optimizer"])
@@ -195,7 +221,9 @@ if __name__ == "__main__":
         "--num_heads", type=int, default=8, help="number of attention heads"
     )
     parser.add_argument("--lr", type=float, default=0.001, help="learning rate")
-    parser.add_argument("--weight_decay", type=float, default=0.001, help="weight decay")
+    parser.add_argument(
+        "--weight_decay", type=float, default=0.001, help="weight decay"
+    )
     parser.add_argument(
         "--nlayers_decoder", type=int, default=3, help="number of layers for decoder"
     )
@@ -219,12 +247,11 @@ if __name__ == "__main__":
         help="Resume training from a previous checkpoint",
     )
     parser.add_argument(
-        '--save_best', 
-        default=False, 
-        action='store_true', 
-        help='Save the "best model" according to validation loss.'
+        "--save_best",
+        default=False,
+        action="store_true",
+        help='Save the "best model" according to validation loss.',
     )
-
 
     args = parser.parse_args()
     hidden_size = args.emb_size
@@ -257,16 +284,14 @@ if __name__ == "__main__":
     )
 
     langs = D_train.langs
-    source_pad_idx = langs['input'].PAD_idx
+    source_pad_idx = langs["input"].PAD_idx
     target_pad_idx = langs["output"].PAD_idx
     source_vocab_size = langs["input"].n_symbols
     target_vocab_size = langs["output"].n_symbols
 
     checkpoint_dir = os.path.abspath(args.dir_model)
     options = ocp.CheckpointManagerOptions(max_to_keep=3, create=True)
-    mngr = ocp.CheckpointManager(
-        checkpoint_dir, item_names=('state',), options=options
-    )
+    mngr = ocp.CheckpointManager(checkpoint_dir, item_names=("state",), options=options)
 
     rngs = nnx.Rngs(42)
     model = DecoderModel(
