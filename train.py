@@ -222,7 +222,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--lr", type=float, default=0.001, help="learning rate")
     parser.add_argument(
-        "--weight_decay", type=float, default=0.001, help="weight decay"
+        "--weight_decay", type=float, default=0.01, help="weight decay"
     )
     parser.add_argument(
         "--nlayers_decoder", type=int, default=3, help="number of layers for decoder"
@@ -268,6 +268,8 @@ if __name__ == "__main__":
     log_every = 10
     val_every = 100
     seq_length = 5000
+    b1 = 0.9
+    b2 = 0.95
 
     D_train, D_val = dats.get_dataset(episode_type)
     train_loader = DataLoader(
@@ -305,7 +307,7 @@ if __name__ == "__main__":
         dropout_prob,
         rngs,
     )
-    tx = optax.adamw(learning_rate=learning_rate, weight_decay=weight_decay)
+    tx = optax.adamw(learning_rate=learning_rate, b1=b1, b2=b2, weight_decay=weight_decay)
     optimizer = nnx.Optimizer(model, tx, wrt=nnx.Param)
 
     train(
