@@ -14,7 +14,6 @@ from model import DecoderModel
 
 hook = install_import_hook("TransformerDecoder", "beartype.beartype")
 
-
 @nnx.jit
 def train_batch(batch, model: DecoderModel, optimizer, source_pad_idx, target_pad_idx):
     source: Int[Array, "B L1"] = batch["xq_context_padded"]
@@ -53,7 +52,8 @@ def train_batch(batch, model: DecoderModel, optimizer, source_pad_idx, target_pa
         return jnp.sum(target_loss * loss_mask) / jnp.sum(loss_mask), predicted_logits
 
     (loss, logits), grads = nnx.value_and_grad(calculate_loss, has_aux=True)(model)
-    optimizer.update(model, grads)
+    # optimizer.update(model, grads)
+    optimizer.update(grads)
 
     correct = jnp.argmax(logits, axis=-1) == target
     accuracy = jnp.sum(correct * (target != target_pad_idx)) / jnp.sum(
@@ -144,6 +144,7 @@ def train(
             loss, acc = train_batch(
                 clean_batch, model, optimizer, source_pad_idx, target_pad_idx
             )
+
             if global_step % log_every == 0:
                 print(
                     f"Step {global_step} | Loss: {loss.item():.4f} | Acc: {acc.item():.4f}"
@@ -249,7 +250,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--save_best",
-        default=True,
+        default=False,
         action="store_true",
         help='Save the "best model" according to validation loss.',
     )
@@ -271,19 +272,26 @@ if __name__ == "__main__":
     seq_length = 5000
     b1 = 0.9
     b2 = 0.95
+    MAX_SOURCE_LEN = 200
 
     D_train, D_val = dats.get_dataset(episode_type)
     train_loader = DataLoader(
         D_train,
         batch_size=batch_size,
-        collate_fn=lambda x: dats.make_biml_batch(x, D_train.langs),
+        collate_fn=lambda x: dats.make_biml_batch(x, D_train.langs, max_source_len=MAX_SOURCE_LEN),
         shuffle=True,
+        num_workers=4,
+        prefetch_factor=2,
+        persistent_workers=True,
     )
     val_loader = DataLoader(
         D_val,
         batch_size=batch_size,
-        collate_fn=lambda x: dats.make_biml_batch(x, D_val.langs),
+        collate_fn=lambda x: dats.make_biml_batch(x, D_val.langs, max_source_len=MAX_SOURCE_LEN),
         shuffle=False,
+        num_workers=4,
+        prefetch_factor=2,
+        persistent_workers=True,
     )
 
     langs = D_train.langs

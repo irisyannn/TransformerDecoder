@@ -281,7 +281,7 @@ def bundle_biml_episode(x_support,y_support,x_query,y_query,myhash,aux={}):
     if aux: sample['aux'] = aux
     return sample
 
-def make_biml_batch(samples, langs):
+def make_biml_batch(samples, langs, max_source_len=None):
     # Batch episodes into a series of padded input and target tensors
     # 
     # Input
@@ -307,7 +307,7 @@ def make_biml_batch(samples, langs):
         mybatch['q_idx'] += [idx*torch.ones(nq, dtype=torch.int)]
         mybatch['in_support'] += [x in sample['xs'] for x in sample['xq']]
     mybatch['q_idx'] = torch.cat(mybatch['q_idx'], dim=0)
-    mybatch['xq_context_padded'],mybatch['xq_context_lengths'] = build_padded_tensor(mybatch['xq_context'], langs['input'])
+    mybatch['xq_context_padded'],mybatch['xq_context_lengths'] = build_padded_tensor(mybatch['xq_context'], langs['input'], max_source_len=max_source_len)
     mybatch['yq_padded'],mybatch['yq_lengths'] = build_padded_tensor(mybatch['yq'], langs['output'])
     mybatch['yq_sos_padded'],mybatch['yq_sos_lengths'] = build_padded_tensor(mybatch['yq'],langs['output'],add_eos=False,add_sos=True)
     return mybatch
@@ -336,7 +336,7 @@ def get_batch_output_pool(batch):
         assert(not any(['output_pool' in sample['aux'] for sample in samples_batch])), "The whole batch must have same output pool. Try batch_size=1."
     return out_mask_allow
 
-def build_padded_tensor(list_seq, lang, add_eos=True, add_sos=False):
+def build_padded_tensor(list_seq, lang, add_eos=True, add_sos=False, max_source_len=None):
     # Transform list of python lists to a padded torch tensors
     # 
     # Input
@@ -356,7 +356,8 @@ def build_padded_tensor(list_seq, lang, add_eos=True, add_sos=False):
     if add_eos:
         z_eos = [z+[EOS_token] for z in z_eos]    
     z_lengths = [len(z) for z in z_eos]
-    max_len = max(z_lengths) # maximum length in this episode
+    max_len = max_source_len if max_source_len is not None else max(z_lengths)
+    # max_len = max(z_lengths) # maximum length in this episode
     z_padded = [pad_seq(z, max_len) for z in z_eos]
     z_padded = [lang.symbols_to_tensor(z, add_eos=False).unsqueeze(0) for z in z_padded]
     z_padded = torch.cat(z_padded, dim=0) # n x max_len
