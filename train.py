@@ -124,6 +124,7 @@ def train(
     target_pad_idx,
     log_every,
     val_every,
+    save_best,
     mngr,
     checkpoint_dir,
 ):
@@ -248,7 +249,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--save_best",
-        default=False,
+        default=True,
         action="store_true",
         help='Save the "best model" according to validation loss.',
     )
@@ -320,6 +321,7 @@ if __name__ == "__main__":
         target_pad_idx,
         log_every,
         val_every,
+        save_best,
         mngr,
         checkpoint_dir,
     )
